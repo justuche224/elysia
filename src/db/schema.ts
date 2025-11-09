@@ -57,9 +57,34 @@ export const productImagesTable = pgTable("product_images", {
   createdAt: timestamp().notNull().defaultNow(),
 });
 
+export const ordersTable = pgTable("orders", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => usersTable.id, { onDelete: "cascade" }),
+  status: varchar({ length: 50 }).notNull().default("pending"),
+  total: decimal("total", { precision: 10, scale: 2 }).notNull(),
+  createdAt: timestamp().notNull().defaultNow(),
+  updatedAt: timestamp().notNull().defaultNow(),
+});
+
+export const orderItemsTable = pgTable("order_items", {
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
+  orderId: integer("order_id")
+    .notNull()
+    .references(() => ordersTable.id, { onDelete: "cascade" }),
+  productId: integer("product_id")
+    .notNull()
+    .references(() => productsTable.id, { onDelete: "cascade" }),
+  quantity: integer().notNull(),
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  createdAt: timestamp().notNull().defaultNow(),
+});
+
 export const usersRelations = relations(usersTable, ({ many }) => ({
   categories: many(categoriesTable),
   products: many(productsTable),
+  orders: many(ordersTable),
 }));
 
 export const categoriesRelations = relations(
@@ -83,6 +108,7 @@ export const productsRelations = relations(productsTable, ({ one, many }) => ({
     references: [categoriesTable.id],
   }),
   images: many(productImagesTable),
+  orderItems: many(orderItemsTable),
 }));
 
 export const productImagesRelations = relations(
@@ -94,3 +120,22 @@ export const productImagesRelations = relations(
     }),
   })
 );
+
+export const ordersRelations = relations(ordersTable, ({ one, many }) => ({
+  user: one(usersTable, {
+    fields: [ordersTable.userId],
+    references: [usersTable.id],
+  }),
+  items: many(orderItemsTable),
+}));
+
+export const orderItemsRelations = relations(orderItemsTable, ({ one }) => ({
+  order: one(ordersTable, {
+    fields: [orderItemsTable.orderId],
+    references: [ordersTable.id],
+  }),
+  product: one(productsTable, {
+    fields: [orderItemsTable.productId],
+    references: [productsTable.id],
+  }),
+}));

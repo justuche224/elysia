@@ -9,6 +9,8 @@ import {
   productsTable,
   productImagesTable,
   categoriesTable,
+  ordersTable,
+  orderItemsTable,
 } from "./db/schema";
 import { eq, and, desc, sql, or } from "drizzle-orm";
 import { uploadFile } from "./utils/upload";
@@ -359,6 +361,112 @@ const app = new Elysia()
             message: t.String(),
           },
           { description: "User not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .get(
+    "/stats",
+    async ({ jwt, headers }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+
+        const productsCountResult = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(productsTable)
+          .where(eq(productsTable.userId, userId));
+
+        const categoriesCountResult = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(categoriesTable)
+          .where(eq(categoriesTable.userId, userId));
+
+        const ordersByStatusResult = await db
+          .select({
+            status: ordersTable.status,
+            count: sql<number>`count(*)`,
+          })
+          .from(ordersTable)
+          .where(eq(ordersTable.userId, userId))
+          .groupBy(ordersTable.status);
+
+        const totalProducts = Number(productsCountResult[0]?.count || 0);
+        const totalCategories = Number(categoriesCountResult[0]?.count || 0);
+
+        const ordersByStatus = ordersByStatusResult.map((item) => ({
+          status: item.status,
+          count: Number(item.count || 0),
+        }));
+
+        return {
+          totalProducts,
+          totalCategories,
+          ordersByStatus,
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      detail: {
+        summary: "Get user statistics",
+        description:
+          "Retrieves statistics for the authenticated user including total products, total categories, and orders grouped by status. Requires a valid JWT token in the Authorization header as 'Bearer <token>'.",
+        tags: ["statistics"],
+        operationId: "getUserStats",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            totalProducts: t.Number({
+              description: "Total number of products for the user",
+            }),
+            totalCategories: t.Number({
+              description: "Total number of categories for the user",
+            }),
+            ordersByStatus: t.Array(
+              t.Object({
+                status: t.String({
+                  description: "Order status",
+                }),
+                count: t.Number({
+                  description: "Number of orders with this status",
+                }),
+              }),
+              {
+                description:
+                  "Array of order counts grouped by status (e.g., 'pending', 'completed', 'cancelled')",
+              }
+            ),
+          },
+          { description: "User statistics retrieved successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
         ),
         500: t.Object(
           {
@@ -1695,6 +1803,527 @@ const app = new Elysia()
             message: t.String(),
           },
           { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .post(
+    "/orders",
+    async ({ jwt, headers, body }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const { items } = body;
+
+        if (!items || !Array.isArray(items) || items.length === 0) {
+          return status(400, {
+            message: "Order must contain at least one item",
+          });
+        }
+
+        let total = 0;
+        const orderItemsData: Array<{
+          productId: number;
+          quantity: number;
+          price: string;
+        }> = [];
+
+        for (const item of items) {
+          const productId = parseInt(item.productId.toString());
+          const quantity = parseInt(item.quantity.toString());
+
+          if (quantity <= 0) {
+            return status(400, {
+              message: `Invalid quantity for product ${productId}`,
+            });
+          }
+
+          const product = await db
+            .select()
+            .from(productsTable)
+            .where(eq(productsTable.id, productId))
+            .limit(1);
+
+          if (product.length === 0) {
+            return status(404, {
+              message: `Product with ID ${productId} not found`,
+            });
+          }
+
+          const productPrice = product[0].price;
+          if (!productPrice) {
+            return status(400, {
+              message: `Product ${productId} does not have a price`,
+            });
+          }
+
+          const itemPrice = parseFloat(productPrice.toString());
+          const itemTotal = itemPrice * quantity;
+          total += itemTotal;
+
+          orderItemsData.push({
+            productId,
+            quantity,
+            price: productPrice.toString(),
+          });
+        }
+
+        const [order] = await db
+          .insert(ordersTable)
+          .values({
+            userId,
+            status: "pending",
+            total: total.toString(),
+          })
+          .returning();
+
+        await db.insert(orderItemsTable).values(
+          orderItemsData.map((item) => ({
+            orderId: order.id,
+            productId: item.productId,
+            quantity: item.quantity,
+            price: item.price,
+          }))
+        );
+
+        const orderItems = await db
+          .select()
+          .from(orderItemsTable)
+          .where(eq(orderItemsTable.orderId, order.id));
+
+        const itemsWithProducts = await Promise.all(
+          orderItems.map(async (item) => {
+            const product = await db
+              .select()
+              .from(productsTable)
+              .where(eq(productsTable.id, item.productId))
+              .limit(1);
+
+            return {
+              id: item.id,
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              product: product[0]
+                ? {
+                    id: product[0].id,
+                    name: product[0].name,
+                    slug: product[0].slug,
+                    sku: product[0].sku,
+                  }
+                : null,
+            };
+          })
+        );
+
+        return status(201, {
+          id: order.id,
+          userId: order.userId,
+          status: order.status,
+          total: order.total,
+          items: itemsWithProducts,
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+        });
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      body: t.Object({
+        items: t.Array(
+          t.Object({
+            productId: t.Union([t.Number(), t.String()], {
+              description: "Product ID",
+            }),
+            quantity: t.Union([t.Number(), t.String()], {
+              description: "Quantity",
+            }),
+          }),
+          {
+            minLength: 1,
+            description: "Array of order items",
+          }
+        ),
+      }),
+      detail: {
+        summary: "Create a new order",
+        description:
+          "Creates a new order with the specified items. Requires authentication via JWT token. Validates that all products exist and have prices.",
+        tags: ["orders"],
+        operationId: "createOrder",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        201: t.Object(
+          {
+            id: t.Number({ description: "Order ID" }),
+            userId: t.Number({ description: "User ID" }),
+            status: t.String({ description: "Order status" }),
+            total: t.String({ description: "Order total" }),
+            items: t.Array(
+              t.Object({
+                id: t.Number(),
+                productId: t.Number(),
+                quantity: t.Number(),
+                price: t.String(),
+                product: t.Union([
+                  t.Object({
+                    id: t.Number(),
+                    name: t.String(),
+                    slug: t.String(),
+                    sku: t.String(),
+                  }),
+                  t.Null(),
+                ]),
+              })
+            ),
+            createdAt: t.Date({ description: "Creation timestamp" }),
+            updatedAt: t.Date({ description: "Last update timestamp" }),
+          },
+          { description: "Order created successfully" }
+        ),
+        400: t.Object(
+          {
+            message: t.String(),
+          },
+          {
+            description:
+              "Bad request - Invalid items, missing products, or products without prices",
+          }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Product not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .get(
+    "/orders",
+    async ({ jwt, headers, query }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const page = query.page ? parseInt(query.page.toString()) : 1;
+        const limit = query.limit ? parseInt(query.limit.toString()) : 10;
+        const offset = (page - 1) * limit;
+
+        const orders = await db
+          .select()
+          .from(ordersTable)
+          .where(eq(ordersTable.userId, userId))
+          .orderBy(desc(ordersTable.createdAt))
+          .limit(limit)
+          .offset(offset);
+
+        const totalCountResult = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(ordersTable)
+          .where(eq(ordersTable.userId, userId));
+
+        const totalCount = Number(totalCountResult[0]?.count || 0);
+
+        const ordersWithItems = await Promise.all(
+          orders.map(async (order) => {
+            const orderItems = await db
+              .select()
+              .from(orderItemsTable)
+              .where(eq(orderItemsTable.orderId, order.id));
+
+            const itemsWithProducts = await Promise.all(
+              orderItems.map(async (item) => {
+                const product = await db
+                  .select()
+                  .from(productsTable)
+                  .where(eq(productsTable.id, item.productId))
+                  .limit(1);
+
+                return {
+                  id: item.id,
+                  productId: item.productId,
+                  quantity: item.quantity,
+                  price: item.price,
+                  product: product[0]
+                    ? {
+                        id: product[0].id,
+                        name: product[0].name,
+                        slug: product[0].slug,
+                        sku: product[0].sku,
+                      }
+                    : null,
+                };
+              })
+            );
+
+            return {
+              ...order,
+              items: itemsWithProducts,
+            };
+          })
+        );
+
+        return {
+          orders: ordersWithItems,
+          pagination: {
+            page,
+            limit,
+            total: totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+          },
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      query: t.Object({
+        page: t.Optional(
+          t.Union([t.Number(), t.String()], {
+            description: "Page number (default: 1)",
+            examples: [1],
+          })
+        ),
+        limit: t.Optional(
+          t.Union([t.Number(), t.String()], {
+            description: "Items per page (default: 10)",
+            examples: [10],
+          })
+        ),
+      }),
+      detail: {
+        summary: "Get user's orders",
+        description:
+          "Retrieves a paginated list of orders for the authenticated user. Requires JWT token.",
+        tags: ["orders"],
+        operationId: "getUserOrders",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            orders: t.Array(
+              t.Object({
+                id: t.Number(),
+                userId: t.Number(),
+                status: t.String(),
+                total: t.String(),
+                createdAt: t.Date(),
+                updatedAt: t.Date(),
+                items: t.Array(
+                  t.Object({
+                    id: t.Number(),
+                    productId: t.Number(),
+                    quantity: t.Number(),
+                    price: t.String(),
+                    product: t.Union([
+                      t.Object({
+                        id: t.Number(),
+                        name: t.String(),
+                        slug: t.String(),
+                        sku: t.String(),
+                      }),
+                      t.Null(),
+                    ]),
+                  })
+                ),
+              })
+            ),
+            pagination: t.Object({
+              page: t.Number(),
+              limit: t.Number(),
+              total: t.Number(),
+              totalPages: t.Number(),
+            }),
+          },
+          { description: "Orders retrieved successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .get(
+    "/orders/:id",
+    async ({ jwt, headers, params }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const orderId = parseInt(params.id);
+
+        const order = await db
+          .select()
+          .from(ordersTable)
+          .where(
+            and(eq(ordersTable.id, orderId), eq(ordersTable.userId, userId))
+          )
+          .limit(1);
+
+        if (order.length === 0) {
+          return status(404, { message: "Order not found" });
+        }
+
+        const orderItems = await db
+          .select()
+          .from(orderItemsTable)
+          .where(eq(orderItemsTable.orderId, orderId));
+
+        const itemsWithProducts = await Promise.all(
+          orderItems.map(async (item) => {
+            const product = await db
+              .select()
+              .from(productsTable)
+              .where(eq(productsTable.id, item.productId))
+              .limit(1);
+
+            return {
+              id: item.id,
+              productId: item.productId,
+              quantity: item.quantity,
+              price: item.price,
+              product: product[0]
+                ? {
+                    id: product[0].id,
+                    name: product[0].name,
+                    slug: product[0].slug,
+                    sku: product[0].sku,
+                    description: product[0].description,
+                  }
+                : null,
+            };
+          })
+        );
+
+        return {
+          ...order[0],
+          items: itemsWithProducts,
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      params: t.Object({
+        id: t.String({ description: "Order ID" }),
+      }),
+      detail: {
+        summary: "Get order by ID",
+        description:
+          "Retrieves a specific order by its ID. The order must belong to the authenticated user. Requires JWT token.",
+        tags: ["orders"],
+        operationId: "getOrderById",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            id: t.Number(),
+            userId: t.Number(),
+            status: t.String(),
+            total: t.String(),
+            createdAt: t.Date(),
+            updatedAt: t.Date(),
+            items: t.Array(
+              t.Object({
+                id: t.Number(),
+                productId: t.Number(),
+                quantity: t.Number(),
+                price: t.String(),
+                product: t.Union([
+                  t.Object({
+                    id: t.Number(),
+                    name: t.String(),
+                    slug: t.String(),
+                    sku: t.String(),
+                    description: t.Union([t.String(), t.Null()]),
+                  }),
+                  t.Null(),
+                ]),
+              })
+            ),
+          },
+          { description: "Order retrieved successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Order not found" }
         ),
         500: t.Object(
           {
