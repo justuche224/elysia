@@ -10,7 +10,7 @@ import {
   productImagesTable,
   categoriesTable,
 } from "./db/schema";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, or } from "drizzle-orm";
 import { uploadFile } from "./utils/upload";
 
 const startTimes = new WeakMap<Request, number>();
@@ -809,6 +809,192 @@ const app = new Elysia()
             }),
           },
           { description: "Products retrieved successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .get(
+    "/products/search",
+    async ({ jwt, headers, query }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const searchTerm = query.q?.toString().trim() || "";
+
+        if (!searchTerm) {
+          return status(400, {
+            message: "Search query parameter 'q' is required",
+          });
+        }
+
+        const page = query.page ? parseInt(query.page.toString()) : 1;
+        const limit = query.limit ? parseInt(query.limit.toString()) : 10;
+        const offset = (page - 1) * limit;
+
+        const searchPattern = `%${searchTerm}%`;
+
+        const products = await db
+          .select()
+          .from(productsTable)
+          .where(
+            and(
+              eq(productsTable.userId, userId),
+              or(
+                sql`${productsTable.name} ILIKE ${searchPattern}`,
+                sql`${productsTable.description} ILIKE ${searchPattern}`,
+                sql`${productsTable.sku} ILIKE ${searchPattern}`,
+                sql`${productsTable.slug} ILIKE ${searchPattern}`
+              )
+            )
+          )
+          .orderBy(desc(productsTable.createdAt))
+          .limit(limit)
+          .offset(offset);
+
+        const totalCountResult = await db
+          .select({ count: sql<number>`count(*)` })
+          .from(productsTable)
+          .where(
+            and(
+              eq(productsTable.userId, userId),
+              or(
+                sql`${productsTable.name} ILIKE ${searchPattern}`,
+                sql`${productsTable.description} ILIKE ${searchPattern}`,
+                sql`${productsTable.sku} ILIKE ${searchPattern}`,
+                sql`${productsTable.slug} ILIKE ${searchPattern}`
+              )
+            )
+          );
+
+        const totalCount = Number(totalCountResult[0]?.count || 0);
+
+        const productsWithImages = await Promise.all(
+          products.map(async (product) => {
+            const images = await db
+              .select()
+              .from(productImagesTable)
+              .where(eq(productImagesTable.productId, product.id));
+
+            return {
+              ...product,
+              images: images.map((img) => ({
+                id: img.id,
+                url: img.url,
+                alt: img.alt,
+                isPrimary: img.isPrimary === 1,
+              })),
+            };
+          })
+        );
+
+        return {
+          products: productsWithImages,
+          pagination: {
+            page,
+            limit,
+            total: totalCount,
+            totalPages: Math.ceil(totalCount / limit),
+          },
+          searchTerm,
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      query: t.Object({
+        q: t.String({
+          minLength: 1,
+          description: "Search query term",
+          examples: ["wireless mouse"],
+        }),
+        page: t.Optional(
+          t.Union([t.Number(), t.String()], {
+            description: "Page number (default: 1)",
+            examples: [1],
+          })
+        ),
+        limit: t.Optional(
+          t.Union([t.Number(), t.String()], {
+            description: "Items per page (default: 10)",
+            examples: [10],
+          })
+        ),
+      }),
+      detail: {
+        summary: "Search products",
+        description:
+          "Searches products by name, description, SKU, or slug. Returns a paginated list of matching products for the authenticated user. Requires JWT token.",
+        tags: ["products"],
+        operationId: "searchProducts",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            products: t.Array(
+              t.Object({
+                id: t.Number(),
+                slug: t.String(),
+                userId: t.Number(),
+                categoryId: t.Union([t.Number(), t.Null()]),
+                sku: t.String(),
+                name: t.String(),
+                description: t.Union([t.String(), t.Null()]),
+                stockCount: t.Number(),
+                price: t.Union([t.String(), t.Null()]),
+                createdAt: t.Date(),
+                updatedAt: t.Date(),
+                images: t.Array(
+                  t.Object({
+                    id: t.Number(),
+                    url: t.String(),
+                    alt: t.Union([t.String(), t.Null()]),
+                    isPrimary: t.Boolean(),
+                  })
+                ),
+              })
+            ),
+            pagination: t.Object({
+              page: t.Number(),
+              limit: t.Number(),
+              total: t.Number(),
+              totalPages: t.Number(),
+            }),
+            searchTerm: t.String(),
+          },
+          { description: "Products retrieved successfully" }
+        ),
+        400: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Bad request - Missing search query parameter" }
         ),
         401: t.Object(
           {
