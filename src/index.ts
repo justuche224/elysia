@@ -13,7 +13,34 @@ import {
 import { eq, and, desc, sql } from "drizzle-orm";
 import { uploadFile } from "./utils/upload";
 
+const startTimes = new WeakMap<Request, number>();
+
+const formatTime = (date: Date = new Date()): string => {
+  const hours = date.getHours().toString().padStart(2, "0");
+  const minutes = date.getMinutes().toString().padStart(2, "0");
+  const seconds = date.getSeconds().toString().padStart(2, "0");
+  const milliseconds = date.getMilliseconds().toString().padStart(3, "0");
+  return `${hours}:${minutes}:${seconds}.${milliseconds}`;
+};
+
 const app = new Elysia()
+  .onBeforeHandle(({ request }) => {
+    const { method, url } = request;
+    const path = new URL(url).pathname;
+    const start = Date.now();
+    startTimes.set(request, start);
+    console.log(`➡️  ${method} ${path}   ← received at ${formatTime()}`);
+  })
+  .onAfterHandle(({ request, response }) => {
+    const { method, url } = request;
+    const path = new URL(url).pathname;
+    const start = startTimes.get(request) || Date.now();
+    const ms = Date.now() - start;
+    const status = response instanceof Response ? response.status : 200;
+    console.log(
+      `⬅️  ${method} ${path} → ${status} (${ms}ms)   at ${formatTime()}`
+    );
+  })
   .use(
     openapi({
       documentation: {
@@ -43,6 +70,132 @@ const app = new Elysia()
     })
   )
   .get("/", () => "Hello Elysia")
+  .get("/html", async () => {
+    try {
+      const file = Bun.file("index.html");
+      return new Response(file, {
+        headers: {
+          "Content-Type": "text/html",
+        },
+      });
+    } catch (error) {
+      return status(500, { message: "Failed to load HTML file" });
+    }
+  })
+  .post(
+    "/test-upload",
+    async ({ body }) => {
+      try {
+        const { file, files, type } = body;
+
+        if (!file && (!files || files.length === 0)) {
+          return status(400, { message: "No file provided" });
+        }
+
+        const uploadType = type || "test";
+
+        if (file) {
+          const url = await uploadFile(file, uploadType);
+          return {
+            success: true,
+            file: {
+              name: file.name,
+              type: file.type,
+              size: file.size,
+              url,
+            },
+          };
+        }
+
+        if (files && files.length > 0) {
+          const uploadResults = await Promise.all(
+            files.map(async (f: File) => {
+              const url = await uploadFile(f, uploadType);
+              return {
+                name: f.name,
+                type: f.type,
+                size: f.size,
+                url,
+              };
+            })
+          );
+
+          return {
+            success: true,
+            files: uploadResults,
+            count: uploadResults.length,
+          };
+        }
+
+        return status(400, { message: "No file provided" });
+      } catch (error) {
+        console.error("Upload test error:", error);
+        return status(500, {
+          message: "Upload failed",
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    },
+    {
+      body: t.Object({
+        file: t.Optional(
+          t.File({
+            description: "Single file to upload",
+          })
+        ),
+        files: t.Optional(
+          t.Files({
+            description: "Multiple files to upload",
+          })
+        ),
+        type: t.Optional(
+          t.String({
+            description: "File type prefix for naming (default: 'test')",
+            examples: ["test", "image", "document"],
+          })
+        ),
+      }),
+      detail: {
+        summary: "Test file upload",
+        description:
+          "Test endpoint for file upload functionality. Uploads one or more files and returns the uploaded file URLs. Useful for testing the upload service configuration.",
+        tags: ["testing"],
+        operationId: "testUpload",
+      },
+      response: {
+        200: t.Union([
+          t.Object({
+            success: t.Boolean(),
+            file: t.Object({
+              name: t.String(),
+              type: t.String(),
+              size: t.Number(),
+              url: t.String(),
+            }),
+          }),
+          t.Object({
+            success: t.Boolean(),
+            files: t.Array(
+              t.Object({
+                name: t.String(),
+                type: t.String(),
+                size: t.Number(),
+                url: t.String(),
+              })
+            ),
+            count: t.Number(),
+          }),
+        ]),
+        400: t.Object({
+          message: t.String(),
+        }),
+        500: t.Object({
+          message: t.String(),
+          error: t.String(),
+        }),
+      },
+    }
+  )
   .post(
     "/signin",
     async ({ body, jwt }) => {

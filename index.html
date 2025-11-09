@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>File Upload Test</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        padding: 20px;
+      }
+
+      .container {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        padding: 40px;
+        max-width: 600px;
+        width: 100%;
+      }
+
+      h1 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 28px;
+      }
+
+      .subtitle {
+        color: #666;
+        margin-bottom: 30px;
+        font-size: 14px;
+      }
+
+      .form-group {
+        margin-bottom: 20px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        color: #333;
+        font-weight: 500;
+        font-size: 14px;
+      }
+
+      input[type="file"] {
+        width: 100%;
+        padding: 12px;
+        border: 2px dashed #ddd;
+        border-radius: 8px;
+        background: #f9f9f9;
+        cursor: pointer;
+        transition: all 0.3s;
+      }
+
+      input[type="file"]:hover {
+        border-color: #667eea;
+        background: #f0f0ff;
+      }
+
+      input[type="text"] {
+        width: 100%;
+        padding: 12px;
+        border: 2px solid #ddd;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: border-color 0.3s;
+      }
+
+      input[type="text"]:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .checkbox-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        cursor: pointer;
+      }
+
+      button {
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.2s, box-shadow 0.2s;
+      }
+
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+      }
+
+      button:active {
+        transform: translateY(0);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .result {
+        margin-top: 30px;
+        padding: 20px;
+        border-radius: 8px;
+        display: none;
+      }
+
+      .result.success {
+        background: #d4edda;
+        border: 2px solid #c3e6cb;
+        color: #155724;
+        display: block;
+      }
+
+      .result.error {
+        background: #f8d7da;
+        border: 2px solid #f5c6cb;
+        color: #721c24;
+        display: block;
+      }
+
+      .result h3 {
+        margin-bottom: 10px;
+        font-size: 18px;
+      }
+
+      .result pre {
+        background: rgba(0, 0, 0, 0.05);
+        padding: 12px;
+        border-radius: 4px;
+        overflow-x: auto;
+        font-size: 12px;
+        margin-top: 10px;
+      }
+
+      .file-info {
+        margin-top: 15px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.7);
+        border-radius: 6px;
+      }
+
+      .file-info-item {
+        margin: 5px 0;
+        font-size: 13px;
+      }
+
+      .url-link {
+        color: #667eea;
+        word-break: break-all;
+        text-decoration: none;
+      }
+
+      .url-link:hover {
+        text-decoration: underline;
+      }
+
+      .loading {
+        display: none;
+        text-align: center;
+        margin-top: 20px;
+        color: #667eea;
+      }
+
+      .loading.active {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>📤 File Upload Test</h1>
+      <p class="subtitle">Test the file upload functionality</p>
+
+      <form id="uploadForm">
+        <div class="form-group">
+          <label for="fileInput">Select File(s)</label>
+          <input type="file" id="fileInput" name="files" multiple />
+        </div>
+
+        <div class="form-group">
+          <label for="typeInput">File Type Prefix (optional)</label>
+          <input
+            type="text"
+            id="typeInput"
+            name="type"
+            placeholder="test"
+            value="test"
+          />
+        </div>
+
+        <div class="form-group">
+          <div class="checkbox-group">
+            <input type="checkbox" id="multipleFiles" checked />
+            <label for="multipleFiles" style="margin: 0; font-weight: normal"
+              >Upload multiple files</label
+            >
+          </div>
+        </div>
+
+        <button type="submit" id="submitBtn">Upload File(s)</button>
+      </form>
+
+      <div class="loading" id="loading">Uploading... ⏳</div>
+
+      <div class="result" id="result"></div>
+    </div>
+
+    <script>
+      const form = document.getElementById("uploadForm");
+      const fileInput = document.getElementById("fileInput");
+      const typeInput = document.getElementById("typeInput");
+      const multipleFilesCheckbox = document.getElementById("multipleFiles");
+      const submitBtn = document.getElementById("submitBtn");
+      const resultDiv = document.getElementById("result");
+      const loadingDiv = document.getElementById("loading");
+
+      multipleFilesCheckbox.addEventListener("change", (e) => {
+        if (e.target.checked) {
+          fileInput.setAttribute("multiple", "");
+        } else {
+          fileInput.removeAttribute("multiple");
+        }
+      });
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const files = fileInput.files;
+        if (files.length === 0) {
+          showResult("error", "Please select at least one file");
+          return;
+        }
+
+        submitBtn.disabled = true;
+        loadingDiv.classList.add("active");
+        resultDiv.className = "result";
+        resultDiv.innerHTML = "";
+
+        try {
+          const formData = new FormData();
+          const type = typeInput.value.trim() || "test";
+          formData.append("type", type);
+
+          if (files.length === 1 && !multipleFilesCheckbox.checked) {
+            formData.append("file", files[0]);
+          } else {
+            for (let i = 0; i < files.length; i++) {
+              formData.append("files", files[i]);
+            }
+          }
+
+          const response = await fetch("/test-upload", {
+            method: "POST",
+            body: formData,
+          });
+
+          const data = await response.json();
+
+          if (response.ok) {
+            if (data.file) {
+              showSuccess(data.file, type);
+            } else if (data.files) {
+              showSuccessMultiple(data.files, data.count, type);
+            } else {
+              showResult("success", "Upload successful!", data);
+            }
+          } else {
+            showResult("error", data.message || "Upload failed", data);
+          }
+        } catch (error) {
+          showResult("error", "Error uploading file: " + error.message, error);
+        } finally {
+          submitBtn.disabled = false;
+          loadingDiv.classList.remove("active");
+        }
+      });
+
+      function showSuccess(file, type) {
+        const html = `
+                <h3>✅ Upload Successful!</h3>
+                <div class="file-info">
+                    <div class="file-info-item"><strong>Name:</strong> ${
+                      file.name
+                    }</div>
+                    <div class="file-info-item"><strong>Type:</strong> ${
+                      file.type
+                    }</div>
+                    <div class="file-info-item"><strong>Size:</strong> ${formatBytes(
+                      file.size
+                    )}</div>
+                    <div class="file-info-item"><strong>URL:</strong> <a href="${
+                      file.url
+                    }" target="_blank" class="url-link">${file.url}</a></div>
+                </div>
+                <pre>${JSON.stringify(file, null, 2)}</pre>
+            `;
+        resultDiv.className = "result success";
+        resultDiv.innerHTML = html;
+      }
+
+      function showSuccessMultiple(files, count, type) {
+        let filesHtml = "";
+        files.forEach((file, index) => {
+          filesHtml += `
+                    <div class="file-info" style="margin-bottom: 10px;">
+                        <div class="file-info-item"><strong>File ${
+                          index + 1
+                        }:</strong> ${file.name}</div>
+                        <div class="file-info-item"><strong>Type:</strong> ${
+                          file.type
+                        }</div>
+                        <div class="file-info-item"><strong>Size:</strong> ${formatBytes(
+                          file.size
+                        )}</div>
+                        <div class="file-info-item"><strong>URL:</strong> <a href="${
+                          file.url
+                        }" target="_blank" class="url-link">${
+            file.url
+          }</a></div>
+                    </div>
+                `;
+        });
+
+        const html = `
+                <h3>✅ Upload Successful! (${count} file(s))</h3>
+                ${filesHtml}
+                <pre>${JSON.stringify({ files, count }, null, 2)}</pre>
+            `;
+        resultDiv.className = "result success";
+        resultDiv.innerHTML = html;
+      }
+
+      function showResult(type, message, data = null) {
+        const html = `
+                <h3>${type === "success" ? "✅" : "❌"} ${message}</h3>
+                ${data ? `<pre>${JSON.stringify(data, null, 2)}</pre>` : ""}
+            `;
+        resultDiv.className = `result ${type}`;
+        resultDiv.innerHTML = html;
+      }
+
+      function formatBytes(bytes) {
+        if (bytes === 0) return "0 Bytes";
+        const k = 1024;
+        const sizes = ["Bytes", "KB", "MB", "GB"];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return (
+          Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i]
+        );
+      }
+    </script>
+  </body>
+</html>
