@@ -409,18 +409,50 @@ const app = new Elysia()
           .where(eq(ordersTable.userId, userId))
           .groupBy(ordersTable.status);
 
+        const totalRevenueResult = await db
+          .select({
+            total: sql<string>`COALESCE(SUM(${ordersTable.total}), 0)`,
+          })
+          .from(ordersTable)
+          .where(eq(ordersTable.userId, userId));
+
+        const revenueByStatusResult = await db
+          .select({
+            status: ordersTable.status,
+            total: sql<string>`COALESCE(SUM(${ordersTable.total}), 0)`,
+          })
+          .from(ordersTable)
+          .where(eq(ordersTable.userId, userId))
+          .groupBy(ordersTable.status);
+
         const totalProducts = Number(productsCountResult[0]?.count || 0);
         const totalCategories = Number(categoriesCountResult[0]?.count || 0);
+        const overallTotal = parseFloat(totalRevenueResult[0]?.total || "0");
 
         const ordersByStatus = ordersByStatusResult.map((item) => ({
           status: item.status,
           count: Number(item.count || 0),
         }));
 
+        const revenueByStatus: Record<string, number> = {};
+        revenueByStatusResult.forEach((item) => {
+          revenueByStatus[item.status] = parseFloat(item.total || "0");
+        });
+
+        const pendingTotal = revenueByStatus["pending"] || 0;
+        const completedTotal = revenueByStatus["completed"] || 0;
+        const cancelledTotal = revenueByStatus["cancelled"] || 0;
+
         return {
           totalProducts,
           totalCategories,
           ordersByStatus,
+          revenue: {
+            overallTotal,
+            pendingTotal,
+            completedTotal,
+            cancelledTotal,
+          },
         };
       } catch (error) {
         console.error(error);
@@ -431,7 +463,7 @@ const app = new Elysia()
       detail: {
         summary: "Get user statistics",
         description:
-          "Retrieves statistics for the authenticated user including total products, total categories, and orders grouped by status. Requires a valid JWT token in the Authorization header as 'Bearer <token>'.",
+          "Retrieves statistics for the authenticated user including total products, total categories, orders grouped by status, and revenue totals. Requires a valid JWT token in the Authorization header as 'Bearer <token>'.",
         tags: ["statistics"],
         operationId: "getUserStats",
         security: [{ bearerAuth: [] }],
@@ -457,6 +489,25 @@ const app = new Elysia()
               {
                 description:
                   "Array of order counts grouped by status (e.g., 'pending', 'completed', 'cancelled')",
+              }
+            ),
+            revenue: t.Object(
+              {
+                overallTotal: t.Number({
+                  description: "Total revenue from all orders",
+                }),
+                pendingTotal: t.Number({
+                  description: "Total revenue from pending orders",
+                }),
+                completedTotal: t.Number({
+                  description: "Total revenue from completed orders",
+                }),
+                cancelledTotal: t.Number({
+                  description: "Total revenue from cancelled orders",
+                }),
+              },
+              {
+                description: "Revenue statistics grouped by order status",
               }
             ),
           },
