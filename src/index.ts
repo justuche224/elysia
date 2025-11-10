@@ -2334,6 +2334,298 @@ const app = new Elysia()
       },
     }
   )
+  .patch(
+    "/orders/:id",
+    async ({ jwt, headers, params, body }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const orderId = parseInt(params.id);
+        const { status: newStatus } = body;
+
+        if (!newStatus || typeof newStatus !== "string") {
+          return status(400, { message: "Status is required" });
+        }
+
+        const order = await db
+          .select()
+          .from(ordersTable)
+          .where(
+            and(eq(ordersTable.id, orderId), eq(ordersTable.userId, userId))
+          )
+          .limit(1);
+
+        if (order.length === 0) {
+          return status(404, { message: "Order not found" });
+        }
+
+        const [updatedOrder] = await db
+          .update(ordersTable)
+          .set({
+            status: newStatus,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(eq(ordersTable.id, orderId), eq(ordersTable.userId, userId))
+          )
+          .returning();
+
+        return {
+          id: updatedOrder.id,
+          userId: updatedOrder.userId,
+          status: updatedOrder.status,
+          total: updatedOrder.total,
+          createdAt: updatedOrder.createdAt,
+          updatedAt: updatedOrder.updatedAt,
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      params: t.Object({
+        id: t.String({ description: "Order ID" }),
+      }),
+      body: t.Object({
+        status: t.String({
+          description: "New order status",
+          examples: ["pending", "completed", "cancelled"],
+        }),
+      }),
+      detail: {
+        summary: "Update order status",
+        description:
+          "Updates the status of a specific order. The order must belong to the authenticated user. Requires JWT token.",
+        tags: ["orders"],
+        operationId: "updateOrderStatus",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            id: t.Number(),
+            userId: t.Number(),
+            status: t.String(),
+            total: t.String(),
+            createdAt: t.Date(),
+            updatedAt: t.Date(),
+          },
+          { description: "Order status updated successfully" }
+        ),
+        400: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Bad request - Missing or invalid status" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Order not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .delete(
+    "/orders/:id",
+    async ({ jwt, headers, params }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const orderId = parseInt(params.id);
+
+        const order = await db
+          .select()
+          .from(ordersTable)
+          .where(
+            and(eq(ordersTable.id, orderId), eq(ordersTable.userId, userId))
+          )
+          .limit(1);
+
+        if (order.length === 0) {
+          return status(404, { message: "Order not found" });
+        }
+
+        await db
+          .delete(ordersTable)
+          .where(
+            and(eq(ordersTable.id, orderId), eq(ordersTable.userId, userId))
+          );
+
+        return status(200, { message: "Order deleted successfully" });
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      params: t.Object({
+        id: t.String({ description: "Order ID" }),
+      }),
+      detail: {
+        summary: "Delete order",
+        description:
+          "Deletes a specific order. The order must belong to the authenticated user. Order items will be automatically deleted due to cascade. Requires JWT token.",
+        tags: ["orders"],
+        operationId: "deleteOrder",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Order deleted successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Order not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .delete(
+    "/products/:id",
+    async ({ jwt, headers, params }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const productId = parseInt(params.id);
+
+        const product = await db
+          .select()
+          .from(productsTable)
+          .where(
+            and(
+              eq(productsTable.id, productId),
+              eq(productsTable.userId, userId)
+            )
+          )
+          .limit(1);
+
+        if (product.length === 0) {
+          return status(404, { message: "Product not found" });
+        }
+
+        await db
+          .delete(productsTable)
+          .where(
+            and(
+              eq(productsTable.id, productId),
+              eq(productsTable.userId, userId)
+            )
+          );
+
+        return status(200, { message: "Product deleted successfully" });
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      params: t.Object({
+        id: t.String({ description: "Product ID" }),
+      }),
+      detail: {
+        summary: "Delete product",
+        description:
+          "Deletes a specific product. The product must belong to the authenticated user. Product images and order items will be automatically deleted due to cascade. Requires JWT token.",
+        tags: ["products"],
+        operationId: "deleteProduct",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Product deleted successfully" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Product not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
   .listen(3000);
 
 console.log(
