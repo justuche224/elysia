@@ -1983,6 +1983,12 @@ const app = new Elysia()
             });
           }
 
+          if (product[0].stockCount < quantity) {
+            return status(400, {
+              message: `Insufficient stock for product ${productId}. Available: ${product[0].stockCount}, Requested: ${quantity}`,
+            });
+          }
+
           const productPrice = product[0].price;
           if (!productPrice) {
             return status(400, {
@@ -2018,6 +2024,15 @@ const app = new Elysia()
             price: item.price,
           }))
         );
+
+        for (const item of orderItemsData) {
+          await db
+            .update(productsTable)
+            .set({
+              stockCount: sql`${productsTable.stockCount} - ${item.quantity}`,
+            })
+            .where(eq(productsTable.id, item.productId));
+        }
 
         const orderItems = await db
           .select()
@@ -2530,25 +2545,6 @@ const app = new Elysia()
         }
 
         const currentOrder = order[0];
-        const isApproving =
-          newStatus.toLowerCase() === "approved" &&
-          currentOrder.status.toLowerCase() !== "approved";
-
-        if (isApproving) {
-          const orderItems = await db
-            .select()
-            .from(orderItemsTable)
-            .where(eq(orderItemsTable.orderId, orderId));
-
-          for (const item of orderItems) {
-            await db
-              .update(productsTable)
-              .set({
-                stockCount: sql`${productsTable.stockCount} - ${item.quantity}`,
-              })
-              .where(eq(productsTable.id, item.productId));
-          }
-        }
 
         const [updatedOrder] = await db
           .update(ordersTable)
