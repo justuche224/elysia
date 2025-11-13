@@ -12,7 +12,7 @@ import {
   ordersTable,
   orderItemsTable,
 } from "./db/schema";
-import { eq, and, desc, sql, or } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or } from "drizzle-orm";
 import { uploadFile } from "./utils/upload";
 
 const startTimes = new WeakMap<Request, number>();
@@ -862,19 +862,59 @@ const app = new Elysia()
         const page = query.page ? parseInt(query.page.toString()) : 1;
         const limit = query.limit ? parseInt(query.limit.toString()) : 10;
         const offset = (page - 1) * limit;
+        const stockStatus = (query as any).stockStatus
+          ? (query as any).stockStatus.toString()
+          : null;
+        const orderBy = (query as any).orderBy
+          ? (query as any).orderBy.toString()
+          : "createdAt";
+        const orderDirection =
+          (query as any).orderDirection === "asc" ? asc : desc;
+
+        let whereCondition = eq(productsTable.userId, userId);
+        if (stockStatus === "in_stock") {
+          whereCondition = and(
+            eq(productsTable.userId, userId),
+            sql`${productsTable.stockCount} > 0`
+          ) as any;
+        } else if (stockStatus === "out_of_stock") {
+          whereCondition = and(
+            eq(productsTable.userId, userId),
+            eq(productsTable.stockCount, 0)
+          ) as any;
+        } else if (stockStatus === "low_stock") {
+          const lowStockThreshold = (query as any).lowStockThreshold
+            ? parseInt((query as any).lowStockThreshold.toString())
+            : 10;
+          whereCondition = and(
+            eq(productsTable.userId, userId),
+            sql`${productsTable.stockCount} > 0 AND ${productsTable.stockCount} <= ${lowStockThreshold}`
+          ) as any;
+        }
+
+        let orderByClause;
+        if (orderBy === "stockCount") {
+          orderByClause = orderDirection(productsTable.stockCount);
+        } else if (orderBy === "name") {
+          orderByClause = orderDirection(productsTable.name);
+        } else if (orderBy === "price") {
+          orderByClause = orderDirection(productsTable.price);
+        } else {
+          orderByClause = orderDirection(productsTable.createdAt);
+        }
 
         const products = await db
           .select()
           .from(productsTable)
-          .where(eq(productsTable.userId, userId))
-          .orderBy(desc(productsTable.createdAt))
+          .where(whereCondition)
+          .orderBy(orderByClause)
           .limit(limit)
           .offset(offset);
 
         const totalCountResult = await db
           .select({ count: sql<number>`count(*)` })
           .from(productsTable)
-          .where(eq(productsTable.userId, userId));
+          .where(whereCondition);
 
         const totalCount = Number(totalCountResult[0]?.count || 0);
 
@@ -925,11 +965,35 @@ const app = new Elysia()
             examples: [10],
           })
         ),
+        stockStatus: t.Optional(
+          t.String({
+            description: "Filter products by stock status",
+            examples: ["in_stock", "out_of_stock", "low_stock"],
+          })
+        ),
+        lowStockThreshold: t.Optional(
+          t.Union([t.Number(), t.String()], {
+            description: "Threshold for low stock filter (default: 10)",
+            examples: [10],
+          })
+        ),
+        orderBy: t.Optional(
+          t.String({
+            description: "Field to order by",
+            examples: ["createdAt", "stockCount", "name", "price"],
+          })
+        ),
+        orderDirection: t.Optional(
+          t.String({
+            description: "Order direction",
+            examples: ["asc", "desc"],
+          })
+        ),
       }),
       detail: {
         summary: "Get user's products",
         description:
-          "Retrieves a paginated list of products for the authenticated user. Requires JWT token.",
+          "Retrieves a paginated list of products for the authenticated user. Supports filtering by stock status (in_stock, out_of_stock, low_stock) and ordering by createdAt, stockCount, name, or price. Requires JWT token.",
         tags: ["products"],
         operationId: "getUserProducts",
         security: [{ bearerAuth: [] }],
@@ -2104,19 +2168,44 @@ const app = new Elysia()
         const page = query.page ? parseInt(query.page.toString()) : 1;
         const limit = query.limit ? parseInt(query.limit.toString()) : 10;
         const offset = (page - 1) * limit;
+        const statusFilter = (query as any).status
+          ? (query as any).status.toString()
+          : null;
+        const orderBy = (query as any).orderBy
+          ? (query as any).orderBy.toString()
+          : "createdAt";
+        const orderDirection =
+          (query as any).orderDirection === "asc" ? asc : desc;
+
+        let whereCondition = eq(ordersTable.userId, userId);
+        if (statusFilter) {
+          whereCondition = and(
+            eq(ordersTable.userId, userId),
+            eq(ordersTable.status, statusFilter)
+          ) as any;
+        }
+
+        let orderByClause;
+        if (orderBy === "status") {
+          orderByClause = orderDirection(ordersTable.status);
+        } else if (orderBy === "total") {
+          orderByClause = orderDirection(ordersTable.total);
+        } else {
+          orderByClause = orderDirection(ordersTable.createdAt);
+        }
 
         const orders = await db
           .select()
           .from(ordersTable)
-          .where(eq(ordersTable.userId, userId))
-          .orderBy(desc(ordersTable.createdAt))
+          .where(whereCondition)
+          .orderBy(orderByClause)
           .limit(limit)
           .offset(offset);
 
         const totalCountResult = await db
           .select({ count: sql<number>`count(*)` })
           .from(ordersTable)
-          .where(eq(ordersTable.userId, userId));
+          .where(whereCondition);
 
         const totalCount = Number(totalCountResult[0]?.count || 0);
 
@@ -2187,11 +2276,29 @@ const app = new Elysia()
             examples: [10],
           })
         ),
+        status: t.Optional(
+          t.String({
+            description: "Filter orders by status",
+            examples: ["pending", "approved", "completed", "cancelled"],
+          })
+        ),
+        orderBy: t.Optional(
+          t.String({
+            description: "Field to order by",
+            examples: ["createdAt", "status", "total"],
+          })
+        ),
+        orderDirection: t.Optional(
+          t.String({
+            description: "Order direction",
+            examples: ["asc", "desc"],
+          })
+        ),
       }),
       detail: {
         summary: "Get user's orders",
         description:
-          "Retrieves a paginated list of orders for the authenticated user. Requires JWT token.",
+          "Retrieves a paginated list of orders for the authenticated user. Supports filtering by status and ordering by createdAt, status, or total. Requires JWT token.",
         tags: ["orders"],
         operationId: "getUserOrders",
         security: [{ bearerAuth: [] }],
@@ -2422,6 +2529,27 @@ const app = new Elysia()
           return status(404, { message: "Order not found" });
         }
 
+        const currentOrder = order[0];
+        const isApproving =
+          newStatus.toLowerCase() === "approved" &&
+          currentOrder.status.toLowerCase() !== "approved";
+
+        if (isApproving) {
+          const orderItems = await db
+            .select()
+            .from(orderItemsTable)
+            .where(eq(orderItemsTable.orderId, orderId));
+
+          for (const item of orderItems) {
+            await db
+              .update(productsTable)
+              .set({
+                stockCount: sql`${productsTable.stockCount} - ${item.quantity}`,
+              })
+              .where(eq(productsTable.id, item.productId));
+          }
+        }
+
         const [updatedOrder] = await db
           .update(ordersTable)
           .set({
@@ -2453,7 +2581,7 @@ const app = new Elysia()
       body: t.Object({
         status: t.String({
           description: "New order status",
-          examples: ["pending", "completed", "cancelled"],
+          examples: ["pending", "approved", "completed", "cancelled"],
         }),
       }),
       detail: {
@@ -2577,6 +2705,149 @@ const app = new Elysia()
             message: t.String(),
           },
           { description: "Order not found" }
+        ),
+        500: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Internal server error" }
+        ),
+      },
+    }
+  )
+  .patch(
+    "/products/:id/stock",
+    async ({ jwt, headers, params, body }) => {
+      try {
+        const authorization = headers.authorization;
+
+        if (!authorization || !authorization.startsWith("Bearer ")) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const token = authorization.substring(7);
+        const payload = await jwt.verify(token);
+
+        if (!payload || typeof payload !== "object" || !("userId" in payload)) {
+          return status(401, { message: "Unauthorized" });
+        }
+
+        const userId = payload.userId as number;
+        const productId = parseInt(params.id);
+        const { action, amount } = body;
+
+        if (!action || (action !== "increase" && action !== "decrease")) {
+          return status(400, {
+            message: "Action must be 'increase' or 'decrease'",
+          });
+        }
+
+        if (
+          !amount ||
+          typeof amount !== "number" ||
+          amount <= 0 ||
+          !Number.isInteger(amount)
+        ) {
+          return status(400, { message: "Amount must be a positive integer" });
+        }
+
+        const product = await db
+          .select()
+          .from(productsTable)
+          .where(
+            and(
+              eq(productsTable.id, productId),
+              eq(productsTable.userId, userId)
+            )
+          )
+          .limit(1);
+
+        if (product.length === 0) {
+          return status(404, { message: "Product not found" });
+        }
+
+        const currentStock = product[0].stockCount;
+        const newStock =
+          action === "increase"
+            ? currentStock + amount
+            : Math.max(0, currentStock - amount);
+
+        const [updatedProduct] = await db
+          .update(productsTable)
+          .set({
+            stockCount: newStock,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(productsTable.id, productId),
+              eq(productsTable.userId, userId)
+            )
+          )
+          .returning();
+
+        return {
+          id: updatedProduct.id,
+          stockCount: updatedProduct.stockCount,
+          previousStockCount: currentStock,
+          action,
+          amount,
+        };
+      } catch (error) {
+        console.error(error);
+        return status(500, { message: "Internal server error" });
+      }
+    },
+    {
+      params: t.Object({
+        id: t.String({ description: "Product ID" }),
+      }),
+      body: t.Object({
+        action: t.String({
+          description: "Action to perform on stock",
+          examples: ["increase", "decrease"],
+        }),
+        amount: t.Number({
+          description: "Amount to increase or decrease",
+          minimum: 1,
+        }),
+      }),
+      detail: {
+        summary: "Update product stock count",
+        description:
+          "Manually increases or decreases the stock count of a specific product. The product must belong to the authenticated user. Requires JWT token.",
+        tags: ["products"],
+        operationId: "updateProductStock",
+        security: [{ bearerAuth: [] }],
+      },
+      response: {
+        200: t.Object(
+          {
+            id: t.Number(),
+            stockCount: t.Number(),
+            previousStockCount: t.Number(),
+            action: t.String(),
+            amount: t.Number(),
+          },
+          { description: "Stock count updated successfully" }
+        ),
+        400: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Bad request - Invalid action or amount" }
+        ),
+        401: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Unauthorized - Invalid or missing JWT token" }
+        ),
+        404: t.Object(
+          {
+            message: t.String(),
+          },
+          { description: "Product not found" }
         ),
         500: t.Object(
           {
